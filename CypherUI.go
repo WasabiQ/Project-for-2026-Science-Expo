@@ -1,105 +1,145 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"image/color"
 	"os/exec"
+	"runtime"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
+// --- HOVER CONTROL ---
+type hoverCtrl struct {
+	widget.BaseWidget
+	sidebar *fyne.Container
+	blur    *canvas.Rectangle
+}
+
+func (h *hoverCtrl) MouseIn(*desktop.MouseEvent)  { h.sidebar.Show(); h.blur.Show(); h.Refresh() }
+func (h *hoverCtrl) MouseOut(*desktop.MouseEvent) { h.sidebar.Hide(); h.blur.Hide(); h.Refresh() }
+
 func main() {
 	myApp := app.New()
-	window := myApp.NewWindow("ToxNet: Cypher Terminal")
-	window.Resize(fyne.NewSize(900, 600))
+	window := myApp.NewWindow("TOXNET: LHC REINFORCED")
+	window.Resize(fyne.NewSize(1000, 750))
 
-	// --- 1. THE HEADER ---
-	header := widget.NewLabel("TOXNET: CYPHER TERMINAL")
-	header.Alignment = fyne.TextAlignCenter
+	// --- LHC BOOT SEQUENCE ---
+	lhcLabel := widget.NewLabelWithStyle("STABILIZING HADRON COLLIDER...", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
+	progress := widget.NewProgressBar()
+	bootScreen := container.NewVBox(layout.NewSpacer(), lhcLabel, progress, layout.NewSpacer())
+	window.SetContent(bootScreen)
 
-	// --- 2. THE 150-NEURON VISUALISER (80-50-20) ---
-	neuronGrid := container.NewWithoutLayout()
-	drawNeurons(neuronGrid)
-	neuronScroll := container.NewScroll(neuronGrid)
-	neuronScroll.SetMinSize(fyne.NewSize(400, 300))
-	neuronScroll.Hide() // Hidden by default
+	// --- MAIN MENU COMPONENTS ---
+	title := canvas.NewText("ToxNet", color.NRGBA{0, 255, 255, 255})
+	title.TextSize = 85
+	title.TextStyle = fyne.TextStyle{Bold: true, Italic: true}
 
-	// --- 3. OUTPUT AREA ---
-	outputLabel := widget.NewLabel("Awaiting LHC Initialisation...")
-	outputLabel.Wrapping = fyne.TextWrapWord
+	// NEURAL WEB (Neurons + Nerves)
+	neuralWeb := container.NewWithoutLayout()
+	drawNeuralWeb(neuralWeb)
 
-	// --- 4. THE LIVE EXECUTION ---
-	inputField := widget.NewEntry()
-	inputField.SetPlaceHolder("Enter 11 Markers (e.g., 0.1 0.5 ...)")
+	// --- SIDEBAR & SETTINGS ---
+	blurLayer := canvas.NewRectangle(color.NRGBA{0, 0, 5, 220})
+	blurLayer.Hide()
 
-	scanBtn := widget.NewButton("INITIALISE SCAN", func() {
-		outputLabel.SetText("BREACHING ATOMIC SHELL...")
-		// Call the Python script
-		res, score := runToxNetInference(inputField.Text)
-		outputLabel.SetText(fmt.Sprintf("RESULT: %s\nIONISATION ENERGY: %s kcal/mol-1", res, score))
+	vizCheck := widget.NewCheck("Visualize Neural Nerves", func(b bool) {
+		if b { neuralWeb.Show() } else { neuralWeb.Hide() }
 	})
+	vizCheck.SetChecked(true)
 
-	// --- 5. CONTROLS ---
-	neuronBtn := widget.NewButton("Visible Neurons: OFF", func() {
-		if neuronScroll.Visible() {
-			neuronScroll.Hide()
-			// neuronBtn.SetText("Visible Neurons: OFF")
-		} else {
-			neuronScroll.Show()
-			// neuronBtn.SetText("Visible Neurons: ON")
+	// Sidebar Content
+	btnCSV := widget.NewButton("OPEN TOX21", func() { openData("Tox21.csv") })
+	settings := container.NewVBox(
+		widget.NewLabelWithStyle("CORE CONFIG", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		vizCheck,
+		widget.NewSelect([]string{"System", "Light", "Dark"}, func(s string) {}),
+		layout.NewSpacer(),
+		btnCSV,
+		widget.NewIcon(theme.SettingsIcon()),
+	)
+	sidebar := container.NewMax(canvas.NewRectangle(color.NRGBA{5, 5, 15, 255}), settings)
+	sidebar.Hide()
+
+	// --- EXECUTE BOOT ---
+	go func() {
+		for i := 0.0; i <= 1.0; i += 0.02 {
+			progress.SetValue(i)
+			time.Sleep(50 * time.Millisecond)
 		}
-	})
-
-	// LAYOUT ON THE "MOTHERBOARD"
-	window.SetContent(container.NewVBox(
-		header,
-		inputField,
-		container.NewHBox(scanBtn, neuronBtn),
-		outputLabel,
-		neuronScroll,
-	))
+		
+		// Main Menu Layout
+		mainUI := container.NewStack(
+			canvas.NewRectangle(color.NRGBA{2, 2, 8, 255}),
+			neuralWeb, // BACKGROUND WEB
+			container.NewCenter(container.NewVBox(
+				title,
+				widget.NewButton("INITIALIZE SCAN", func() {}),
+			)),
+			blurLayer,
+			container.NewHBox(sidebar, layout.NewSpacer()),
+			&hoverCtrl{sidebar: sidebar, blur: blurLayer},
+		)
+		window.SetContent(mainUI)
+	}()
 
 	window.ShowAndRun()
 }
 
-// 150-Neuron Web Generation (80-50-20)
-func drawNeurons(c *fyne.Container) {
+// DRAWS NEURONS AND CONNECTING NERVES (LINES)
+func drawNeuralWeb(c *fyne.Container) {
 	layers := []int{80, 50, 20}
-	xOffset := float32(50)
-	for _, count := range layers {
+	var prevLayerPoints []fyne.Position
+
+	xSpacing := float32(280)
+	ySpacing := float32(8)
+
+	for l, count := range layers {
+		var currentLayerPoints []fyne.Position
+		xPos := float32(l)*xSpacing + 100
+
 		for i := 0; i < count; i++ {
-			dot := canvas.NewCircle(color.NRGBA{0, 255, 255, 150})
-			dot.Resize(fyne.NewSize(4, 4))
-			dot.Move(fyne.NewPos(xOffset, float32(i*8)))
+			yPos := float32(i)*ySpacing + 40
+			pos := fyne.NewPos(xPos, yPos)
+			currentLayerPoints = append(currentLayerPoints, pos)
+
+			// Draw Nerves (Connecting lines to previous layer)
+			if l > 0 {
+				for _, prevPos := range prevLayerPoints {
+					// Only draw some nerves to avoid "Ruin" (clutter)
+					if i%10 == 0 { 
+						line := canvas.NewLine(color.NRGBA{0, 255, 255, 30}) // Very faint nerves
+						line.Position1 = prevPos
+						line.Position2 = pos
+						line.StrokeWidth = 0.5
+						c.Add(line)
+					}
+				}
+			}
+
+			// Draw Neuron (The Dot)
+			dot := canvas.NewCircle(color.NRGBA{0, 255, 255, 180})
+			dot.Resize(fyne.NewSize(3, 3))
+			dot.Move(pos)
 			c.Add(dot)
 		}
-		xOffset += 100
+		prevLayerPoints = currentLayerPoints
 	}
 }
 
-func runToxNetInference(data string) (string, string) {
-	// Splitting data into the 11 markers
-	markers := strings.Fields(data)
-	// Args: ToxNet.py [Name] [SMILES] [Markers...]
-	args := append([]string{"ToxNet.py", "SCAN_USER", "N/A"}, markers...)
-	
-	cmd := exec.Command("python", args...) // Use "python" or "python3" depending on your HP setup
-	out, err := cmd.Output()
-	if err != nil {
-		return "ERROR", "0.000"
+func openData(f string) {
+	switch runtime.GOOS {
+	case "windows": exec.Command("cmd", "/c", "start", f).Start()
+	case "darwin": exec.Command("open", f).Start()
+	default: exec.Command("xdg-open", f).Start()
 	}
-
-	// Parsing: RESULT:TOXIC:0.99
-	output := string(out)
-	if strings.Contains(output, "RESULT") {
-		parts := strings.Split(output, ":")
-		return parts[1], parts[2]
-	}
-	return "UNKNOWN", "0.000"
 }
