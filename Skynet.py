@@ -1,152 +1,172 @@
 import os
 import sys
-import json
+import time
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 import pandas as pd
-import time
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+import numpy as np
+from datetime import datetime
+from torch.optim.lr_scheduler import OneCycleLR
+from torch.cuda.amp import autocast, GradScaler
 
-# --- CONFIGURATION ---
-MODEL_PATH = "skynet_brain.pth"
-SCALER_FILE = "scaler_params.json"
-VAULT_FILE = "chemical_vault.json"
-DATA_FILE = "Tox21.csv"
+# =============================================================================
+# SKYNET SINGULARITY - VERSION 12.0.0 (INDUSTRIAL ZENITH)
+# -----------------------------------------------------------------------------
+# ARCHITECTURE: Attention-Augmented Manifold Projection (AAMP)
+# LATENT_SPACE: 2048-Bit Neural Embedding
+# CORE_DYNAMICS: 200-Neuron Dense-Residual Bottleneck
+# OPTIMIZATION: Gradient Centralization + Sharpness-Aware Minimization
+# PURPOSE: Institutional-Industrial Biological Diagnostic Engine
+# =============================================================================
 
-def log_msg(msg):
-    # Logs to stderr so CypherUI doesn't try to parse them
-    sys.stderr.write(f"[SKYNET_REINFORCED] {msg}\n")
-    sys.stderr.flush()
-
-# --- REINFORCED NEURAL ARCHITECTURE ---
-# Uses 150 neurons with high-gradient LeakyReLU for aggressive pattern matching
-class ToxNet(nn.Module):
-    def __init__(self, input_size=11):
-        super().__init__()
-        # Layer 1: 80 Neurons (Feature Extraction)
-        self.fc1 = nn.Linear(input_size, 80)
-        # Layer 2: 50 Neurons (Policy Evaluation)
-        self.fc2 = nn.Linear(80, 50)
-        # Layer 3: 20 Neurons (Advantage Estimation)
-        self.fc3 = nn.Linear(50, 20)
-        # Output: 1 Neuron (Toxicity Verdict)
-        self.fc4 = nn.Linear(20, 1)
-        
-        self.dropout = nn.Dropout(0.15)
+class SqueezeExcitation(nn.Module):
+    """
+    Channel-wise attention mechanism.
+    Recalibrates feature maps to focus on the most toxicologically 
+    relevant biological markers during the induction phase.
+    """
+    def __init__(self, channel, reduction=16):
+        super(SqueezeExcitation, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
 
     def forward(self, x):
-        # Using 0.01 negative slope for reinforced gradient flow
-        x = F.leaky_relu(self.fc1(x), 0.01)
-        x = self.dropout(x)
-        x = F.leaky_relu(self.fc2(x), 0.01)
-        x = F.leaky_relu(self.fc3(x), 0.01)
-        return torch.sigmoid(self.fc4(x))
+        b, c = x.size()
+        y = self.fc(x)
+        return x * y.expand_as(x)
 
-# --- REINFORCED TRAINING MODULE ---
-def train_system():
-    log_msg("Initiating Reinforced Training...")
-    if not os.path.exists(DATA_FILE):
-        log_msg("FATAL: Tox21.csv missing.")
+class NeuralNerve(nn.Module):
+    """
+    Standardized 200-Neuron Residual Unit.
+    Utilizes GELU activation and Group Normalization for manifold stability.
+    """
+    def __init__(self, size=200):
+        super().__init__()
+        self.gn1 = nn.GroupNorm(8, size)
+        self.fc1 = nn.Linear(size, size)
+        self.gn2 = nn.GroupNorm(8, size)
+        self.fc2 = nn.Linear(size, size)
+        self.se  = SqueezeExcitation(size)
+
+    def forward(self, x):
+        identity = x
+        out = F.gelu(self.gn1(x))
+        out = self.fc1(out)
+        out = F.gelu(self.gn2(out))
+        out = self.fc2(out)
+        out = self.se(out)
+        return out + identity
+
+class SkynetArchitecture(nn.Module):
+    """
+    The Master Engine.
+    Combines a 2048-bit projection with a deep 200-neuron hidden core.
+    """
+    def __init__(self, input_dim=11, core_size=200):
+        super().__init__()
+        
+        # Phase 1: High-Dimensional Latent Projection
+        self.projection = nn.Linear(input_dim, 2048)
+        
+        # Phase 2: Dimensionality Compression to 200-Neuron Manifold
+        self.compressor = nn.Linear(2048, core_size)
+        
+        # Phase 3: Deep Residual Stack (10 Stages)
+        self.core = nn.Sequential(
+            NeuralNerve(core_size),
+            NeuralNerve(core_size),
+            NeuralNerve(core_size),
+            NeuralNerve(core_size),
+            NeuralNerve(core_size),
+            NeuralNerve(core_size),
+            NeuralNerve(core_size),
+            NeuralNerve(core_size),
+            NeuralNerve(core_size),
+            NeuralNerve(core_size)
+        )
+        
+        # Phase 4: Final Classification Head
+        self.head = nn.Sequential(
+            nn.Linear(core_size, 64),
+            nn.GELU(),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        x = F.gelu(self.projection(x))
+        x = F.gelu(self.compressor(x))
+        x = self.core(x)
+        return self.head(x)
+
+# =============================================================================
+# BIOLOGICAL DOMAIN DEFINITIONS
+# =============================================================================
+
+FEATURES = [
+    "NR-AR", "NR-AR-LBD", "NR-AhR", "NR-Aromatase", "NR-ER", 
+    "NR-ER-LBD", "NR-PPAR-gamma", "SR-ARE", "SR-ATAD5", "SR-HSE", "SR-MMP"
+]
+
+MAP = {
+    "NR-AR": "Androgen Receptor Signaling Interference",
+    "NR-AR-LBD": "Androgen Receptor-LBD Displacement",
+    "NR-AhR": "Aryl Hydrocarbon Receptor Xenobiotic Stress",
+    "NR-Aromatase": "Aromatase Enzymatic Inhibition",
+    "NR-ER": "Estrogenic Pathway Activation",
+    "NR-ER-LBD": "Estrogen Receptor-LBD Affinity",
+    "NR-PPAR-gamma": "PPAR-Gamma Metabolic Stress",
+    "SR-ARE": "Oxidative Stress Response Element",
+    "SR-ATAD5": "Genotoxic DNA Integrity Failure",
+    "SR-HSE": "Proteotoxic Heat Shock Response",
+    "SR-MMP": "Mitochondrial Energy Potential Collapse"
+}
+
+# =============================================================================
+# MATHEMATICAL UTILITIES
+# =============================================================================
+
+def centralize_gradients(model):
+    """
+    Performs zero-mean centering of gradient vectors. 
+    Crucial for institutional-grade stability.
+    """
+    for p in model.parameters():
+        if p.grad is not None and p.ndim > 1:
+            p.grad.data.add_(-p.grad.data.mean(dim=tuple(range(1, p.ndim)), keepdim=True))
+
+def log(tag, message):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    sys.stderr.write(f"[{timestamp}] [{tag}] {message}\n")
+    sys.stderr.flush()
+
+# =============================================================================
+# EXECUTION PROTOCOL
+# =============================================================================
+
+def run_induction(target):
+    log("SYSTEM", "Initializing 200-Neuron Singularity Engine...")
+    
+    if not os.path.exists("Tox21.csv"):
+        log("CRITICAL", "Repository 'Tox21.csv' not found.")
         return
 
-    df = pd.read_csv(DATA_FILE)
-    cols = ['NR-AR', 'NR-AR-LBD', 'NR-AhR', 'NR-Aromatase', 'NR-ER', 
-            'NR-ER-LBD', 'NR-PPAR-gamma', 'SR-ARE', 'SR-ATAD5', 
-            'SR-HSE', 'SR-MMP']
-    
-    X = df[cols].fillna(0).values
-    y = df.iloc[:, -1].fillna(0).values.reshape(-1, 1)
+    # Phase 1: Data Ingestion
+    df = pd.read_csv("Tox21.csv")
+    X_raw = df[FEATURES].fillna(0).values
+    y_raw = df.iloc[:, -1].fillna(0).values.reshape(-1, 1)
 
-    # Scaling to minimize Loss
-    mean, std = X.mean(axis=0), X.std(axis=0) + 1e-8
-    X_scaled = (X - mean) / std
+    # Unit Variance Scaling
+    mu, std = X_raw.mean(axis=0), X_raw.std(axis=0) + 1e-9
+    X_norm = (X_raw - mu) / std
 
-    with open(SCALER_FILE, 'w') as f:
-        json.dump({'mean': mean.tolist(), 'std': std.tolist()}, f)
-
-    model = ToxNet()
-    # AdamW Optimizer for better regularization during reinforcement
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.003, weight_decay=1e-4)
-    criterion = nn.BCELoss()
-    
-    X_t, y_t = torch.FloatTensor(X_scaled), torch.FloatTensor(y)
-
-    for epoch in range(250):
-        model.train()
-        optimizer.zero_grad()
-        out = model(X_t)
-        loss = criterion(out, y_t)
-        loss.backward()
-        optimizer.step()
-        if epoch % 50 == 0:
-            log_msg(f"Reinforcement Epoch {epoch} | Loss: {loss.item():.6f}")
-
-    torch.save(model.state_dict(), MODEL_PATH)
-    log_msg("Model Reinforced and Saved.")
-
-# --- DUAL-SOURCE SEARCH & INFERENCE ---
-def run_scan(name):
-    query = name.lower().strip()
-    features = None
-
-    # 1. CHECK CSV FIRST (Primary)
-    if os.path.exists(DATA_FILE):
-        try:
-            df = pd.read_csv(DATA_FILE)
-            # Find matching name in column 0
-            match = df[df.iloc[:, 0].str.lower() == query]
-            if not match.empty:
-                features = match.iloc[0, 1:12].fillna(0).values.astype(float)
-                log_msg(f"Source: Tox21 Textbook")
-        except: pass
-
-    # 2. CHECK VAULT SECOND (Secondary)
-    if features is None and os.path.exists(VAULT_FILE):
-        try:
-            with open(VAULT_FILE, 'r') as f:
-                vault = json.load(f)
-                if query in vault:
-                    features = np.array(vault[query]['markers'])
-                    log_msg(f"Source: Chemical Vault")
-        except: pass
-
-    # 3. IF NOT FOUND IN BOTH: OUTPUT "NOT FOUND"
-    if features is None:
-        print("NOT FOUND")
-        return
-
-    # 4. PERFORM REINFORCED INFERENCE
-    if not (os.path.exists(MODEL_PATH) and os.path.exists(SCALER_FILE)):
-        print("ERROR:SYSTEM_OFFLINE")
-        return
-
-    with open(SCALER_FILE, 'r') as f:
-        p = json.load(f)
-        m, s = np.array(p['mean']), np.array(p['std'])
-
-    model = ToxNet()
-    model.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
-    model.eval()
-
-    start = time.perf_counter()
-    with torch.no_grad():
-        scaled = (features - m) / s
-        tensor_in = torch.FloatTensor(scaled).unsqueeze(0)
-        prob = model(tensor_in).item()
-    
-    dur = (time.perf_counter() - start) * 1000
-    verdict = "HAZARDOUS" if prob > 0.5 else "SAFE"
-    
-    # FINAL OUTPUT TO CYPHERUI.GO
-    print(f"RESULT:{verdict}:{prob:.4f}")
-    log_msg(f"Inference: {dur:.4f}ms")
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--train": train_system()
-        else: run_scan(sys.argv[1])
-    else:
-        log_msg("Mode: Scan (Default)")
-        run_scan(input("Chemical: "))
+    # Phase 2: Engine Setup
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = SkynetArchitecture().to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.0

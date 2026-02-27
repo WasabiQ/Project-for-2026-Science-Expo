@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package skynet;
+option go_package = "./proto";
+
+import "google/protobuf/timestamp.proto";
+
+message Chemical {
+    // Identity Layer
+    string name = 1;
+    string smiles = 2;
+    string iupac_name = 3;
+    string chembl_id = 4;
+    int32 pubchem_cid = 5;
+
+    // Neural Network Layer (High-Resolution Fingerprint)
+    // 2048-bit Morgan/Circular Fingerprint bits
+    repeated int32 fingerprint = 6; 
+
+    // Physico-Chemical Layer
+    message Descriptors {
+        float molecular_weight = 1;
+        float logp = 2;
+        float tpsa = 3;
+        int32 h_bond_donors = 4;
+        int32 h_bond_acceptors = 5;
+        int32 rotatable_bonds = 6;
+        float formal_charge = 7;
+        float complexity = 8;
+    }
+    Descriptors descriptors = 7;
+
+    // Metadata Layer
+    google.protobuf.Timestamp scraped_at = 8;
+    string data_version = 9; // e.g., "Tox21-v1.0"
+}
+
+message Vault {
+    map<string, Chemical> entries = 1;
+    string institution = 2; // "Skynet Research Labs"
+}

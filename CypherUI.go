@@ -3,143 +3,143 @@ package main
 import (
 	"fmt"
 	"image/color"
-	"os/exec"
-	"runtime"
+	"math/rand"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	// THE CORE ECOSYSTEM
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	// PHYSICS: Chipmunk2D (The best 2D engine for Go)
+	"github.com/vova616/chipmunk"
+	"github.com/vova616/chipmunk/vect"
+
+	// DATA: Google Protobuf
+	pb "Skynet/proto"
 )
 
-// --- HOVER CONTROL ---
-type hoverCtrl struct {
-	widget.BaseWidget
-	sidebar *fyne.Container
-	blur    *canvas.Rectangle
+// --- 1. THE ARCHITECTURAL STATE ---
+type ToxNetCore struct {
+	App    fyne.App
+	Window fyne.Window
+	Vault  *pb.Vault
+	Space  *chipmunk.Space
+	
+	// UI Components (Pointer refs for reactive updates)
+	Output  *widget.Entry
+	Search  *widget.Entry
+	Status  *canvas.Text
+	Neurons []*Neuron
 }
 
-func (h *hoverCtrl) MouseIn(*desktop.MouseEvent)  { h.sidebar.Show(); h.blur.Show(); h.Refresh() }
-func (h *hoverCtrl) MouseOut(*desktop.MouseEvent) { h.sidebar.Hide(); h.blur.Hide(); h.Refresh() }
+type Neuron struct {
+	Shape *canvas.Circle
+	Body  *chipmunk.Body
+}
+
+// --- 2. THE THEME ENGINE (Google Lab Aesthetic) ---
+type labTheme struct{ font fyne.Resource }
+
+func (t *labTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+	if n == theme.ColorNameBackground { return color.NRGBA{2, 4, 8, 255} }
+	if n == theme.ColorNamePrimary { return color.NRGBA{0, 255, 150, 255} }
+	return theme.DefaultTheme().Color(n, v)
+}
+func (t *labTheme) Font(s fyne.TextStyle) fyne.Resource { return t.font } // Hardcoded inject
+func (t *labTheme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultTheme().Icon(n) }
+func (t *labTheme) Size(n fyne.ThemeSizeName) float32      { return theme.DefaultTheme().Size(n) }
+
+// --- 3. LOGIC MODULES (Minimalistic) ---
+
+func (t *ToxNetCore) LoadData() {
+	// Rely on OS library for relative path resolution
+	path, _ := filepath.Abs("chemical_vault.bin")
+	data, _ := os.ReadFile(path)
+	t.Vault = &pb.Vault{}
+	pb.Unmarshal(data, t.Vault)
+}
+
+func (t *ToxNetCore) InitPhysics() {
+	t.Space = chipmunk.NewSpace()
+	t.Space.Gravity = vect.Vect{X: 0, Y: 0} // Zero-G orbital movement
+
+	// Create 100 library-managed bodies
+	for i := 0; i < 100; i++ {
+		radius := vect.Float(rand.Intn(3) + 2)
+		shape := chipmunk.NewCircle(vect.Vect{0, 0}, radius)
+		shape.SetElasticity(1)
+		
+		body := chipmunk.NewBody(1, shape.Moment(1))
+		body.SetPosition(vect.Vect{vect.Float(rand.Intn(1200)), vect.Float(rand.Intn(800))})
+		body.SetVelocity(vect.Float(rand.Intn(40)-20), vect.Float(rand.Intn(40)-20))
+		
+		t.Space.AddBody(body)
+		t.Space.AddShape(shape)
+		
+		dot := canvas.NewCircle(color.NRGBA{0, 255, 150, 40})
+		dot.Resize(fyne.NewSize(float32(radius*2), float32(radius*2)))
+		t.Neurons = append(t.Neurons, &Neuron{Shape: dot, Body: body})
+	}
+}
+
+// --- 4. THE UI COMPOSITION (The "Mac" Look) ---
+
+func (t *ToxNetCore) Assemble() fyne.CanvasObject {
+	t.Output = widget.NewMultiLineEntry()
+	t.Output.Disable()
+	
+	t.Search = widget.NewEntry()
+	t.Search.SetPlaceHolder("λ_Search_Molecular_ID...")
+	t.Search.OnSubmitted = func(q string) {
+		// Protobuf Map lookup is O(1) - Fast library logic
+		if chem, ok := t.Vault.Entries[strings.ToLower(q)]; ok {
+			t.Output.SetText(fmt.Sprintf("NAME: %s\nSMILES: %s\nMW: %.2f\nLOGP: %.2f", 
+				chem.Name, chem.Smiles, chem.Descriptors.MolecularWeight, chem.Descriptors.Logp))
+		}
+	}
+
+	// Tiling Layering
+	bg := container.NewWithoutLayout()
+	for _, n := range t.Neurons { bg.Add(n.Shape) }
+
+	glassPanel := container.NewBorder(
+		nil, container.NewPadded(t.Search), nil, nil, 
+		container.NewStack(canvas.NewRectangle(color.NRGBA{255, 255, 255, 5}), t.Output),
+	)
+
+	return container.NewStack(bg, container.NewPadded(glassPanel))
+}
+
+// --- 5. EXECUTION ENGINE ---
 
 func main() {
-	myApp := app.New()
-	window := myApp.NewWindow("TOXNET: LHC REINFORCED")
-	window.Resize(fyne.NewSize(1000, 750))
+	core := &ToxNetCore{App: app.New()}
+	core.LoadData()
+	core.Window = core.App.NewWindow("TOXNET_TITAN")
+	core.InitPhysics()
 
-	// --- LHC BOOT SEQUENCE ---
-	lhcLabel := widget.NewLabelWithStyle("STABILIZING HADRON COLLIDER...", fyne.TextAlignCenter, fyne.TextStyle{Monospace: true})
-	progress := widget.NewProgressBar()
-	bootScreen := container.NewVBox(layout.NewSpacer(), lhcLabel, progress, layout.NewSpacer())
-	window.SetContent(bootScreen)
+	core.Window.SetContent(core.Assemble())
+	core.Window.SetFullScreen(true)
 
-	// --- MAIN MENU COMPONENTS ---
-	title := canvas.NewText("ToxNet", color.NRGBA{0, 255, 255, 255})
-	title.TextSize = 85
-	title.TextStyle = fyne.TextStyle{Bold: true, Italic: true}
-
-	// NEURAL WEB (Neurons + Nerves)
-	neuralWeb := container.NewWithoutLayout()
-	drawNeuralWeb(neuralWeb)
-
-	// --- SIDEBAR & SETTINGS ---
-	blurLayer := canvas.NewRectangle(color.NRGBA{0, 0, 5, 220})
-	blurLayer.Hide()
-
-	vizCheck := widget.NewCheck("Visualize Neural Nerves", func(b bool) {
-		if b { neuralWeb.Show() } else { neuralWeb.Hide() }
-	})
-	vizCheck.SetChecked(true)
-
-	// Sidebar Content
-	btnCSV := widget.NewButton("OPEN TOX21", func() { openData("Tox21.csv") })
-	settings := container.NewVBox(
-		widget.NewLabelWithStyle("CORE CONFIG", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		vizCheck,
-		widget.NewSelect([]string{"System", "Light", "Dark"}, func(s string) {}),
-		layout.NewSpacer(),
-		btnCSV,
-		widget.NewIcon(theme.SettingsIcon()),
-	)
-	sidebar := container.NewMax(canvas.NewRectangle(color.NRGBA{5, 5, 15, 255}), settings)
-	sidebar.Hide()
-
-	// --- EXECUTE BOOT ---
+	// Library-based Ticker for 60FPS physics
 	go func() {
-		for i := 0.0; i <= 1.0; i += 0.02 {
-			progress.SetValue(i)
-			time.Sleep(50 * time.Millisecond)
+		ticker := time.NewTicker(time.Second / 60)
+		for range ticker.C {
+			core.Space.Step(1.0 / 60.0)
+			for _, n := range core.Neurons {
+				pos := n.Body.Position()
+				n.Shape.Move(fyne.NewPos(float32(pos.X), float32(pos.Y)))
+			}
+			core.Window.Canvas().Refresh(core.Window.Content())
 		}
-		
-		// Main Menu Layout
-		mainUI := container.NewStack(
-			canvas.NewRectangle(color.NRGBA{2, 2, 8, 255}),
-			neuralWeb, // BACKGROUND WEB
-			container.NewCenter(container.NewVBox(
-				title,
-				widget.NewButton("INITIALIZE SCAN", func() {}),
-			)),
-			blurLayer,
-			container.NewHBox(sidebar, layout.NewSpacer()),
-			&hoverCtrl{sidebar: sidebar, blur: blurLayer},
-		)
-		window.SetContent(mainUI)
 	}()
 
-	window.ShowAndRun()
-}
-
-// DRAWS NEURONS AND CONNECTING NERVES (LINES)
-func drawNeuralWeb(c *fyne.Container) {
-	layers := []int{80, 50, 20}
-	var prevLayerPoints []fyne.Position
-
-	xSpacing := float32(280)
-	ySpacing := float32(8)
-
-	for l, count := range layers {
-		var currentLayerPoints []fyne.Position
-		xPos := float32(l)*xSpacing + 100
-
-		for i := 0; i < count; i++ {
-			yPos := float32(i)*ySpacing + 40
-			pos := fyne.NewPos(xPos, yPos)
-			currentLayerPoints = append(currentLayerPoints, pos)
-
-			// Draw Nerves (Connecting lines to previous layer)
-			if l > 0 {
-				for _, prevPos := range prevLayerPoints {
-					// Only draw some nerves to avoid "Ruin" (clutter)
-					if i%10 == 0 { 
-						line := canvas.NewLine(color.NRGBA{0, 255, 255, 30}) // Very faint nerves
-						line.Position1 = prevPos
-						line.Position2 = pos
-						line.StrokeWidth = 0.5
-						c.Add(line)
-					}
-				}
-			}
-
-			// Draw Neuron (The Dot)
-			dot := canvas.NewCircle(color.NRGBA{0, 255, 255, 180})
-			dot.Resize(fyne.NewSize(3, 3))
-			dot.Move(pos)
-			c.Add(dot)
-		}
-		prevLayerPoints = currentLayerPoints
-	}
-}
-
-func openData(f string) {
-	switch runtime.GOOS {
-	case "windows": exec.Command("cmd", "/c", "start", f).Start()
-	case "darwin": exec.Command("open", f).Start()
-	default: exec.Command("xdg-open", f).Start()
-	}
+	core.Window.ShowAndRun()
 }
