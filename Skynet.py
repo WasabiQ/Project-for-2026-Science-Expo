@@ -169,4 +169,5 @@ def run_induction(target):
     # Phase 2: Engine Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SkynetArchitecture().to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.0
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_d=ecay,0.0)
+    # \,/0

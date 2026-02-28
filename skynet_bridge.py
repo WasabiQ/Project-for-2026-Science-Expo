@@ -1,68 +1,74 @@
 import sys
-import pandas as pd
+import json
 import torch
+import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import AllChem
-import json
-
-# Import your architecture from your Skynet.py
 from Skynet import SkynetArchitecture, FEATURES, MAP
 
-def get_binary_fingerprint(smiles):
-    """Converts SMILES 'Letters' to 2048-bit Binary."""
-    mol = Chem.MolFromSmiles(smiles)
-    if not mol: return None
-    fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
-    return torch.FloatTensor(list(fp))
-
 def run_pipeline(chemical_name):
-    # 1. Check local vault for SMILES
-    # (Assuming your vault is a CSV for this script's simplicity)
-    vault = pd.read_csv("chemical_vault.csv") 
-    match = vault[vault['name'].str.contains(chemical_name, case=False)]
-    
-    if match.empty:
-        return {"error": "Chemical not found in vault."}
-    
-    smiles = match.iloc[0]['smiles']
-
-    # 2. Check Tox21 for real data
-    tox_data = pd.read_csv("Tox21.csv")
-    real_match = tox_data[tox_data['smiles'] == smiles]
-
-    if not real_match.empty:
-        source = "Experimental (Tox21)"
-        results = real_match[FEATURES].iloc[0].to_dict()
-    else:
-        # 3. AI Prediction Mode
-        source = "AI Prediction (Skynet v12)"
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    try:
+        # 1. SEARCH THE 7,832 ENTRIES
+        tox_data = pd.read_csv("Tox21.csv")
         
-        # Load your trained model
-        model = SkynetArchitecture(input_dim=2048).to(device)
-        # model.load_state_dict(torch.load("skynet_weights.pth")) # Load if you have it
-        model.eval()
-
-        binary_input = get_binary_fingerprint(smiles).to(device).unsqueeze(0)
-        with torch.no_grad():
-            preds = model(binary_input).squeeze().tolist()
+        # Search by name
+        match = tox_data[tox_data['compound_name'].str.contains(chemical_name, case=False, na=False)]
         
-        results = {FEATURES[i]: preds[i] for i in range(len(FEATURES))}
+        # --- PATH A: DATABASE HIT ---
+        if not match.empty:
+            smiles = match.iloc[0]['smiles']
+            # Gather the 11 real biological markers
+            found = [MAP[f] for f in FEATURES if match.iloc[0][f] == 1]
+            
+            return {
+                "name": chemical_name.upper(),
+                "smiles": smiles,
+                "source": "Tox21 Database",
+                "markers": ["Yea, i found it and this is what it does:"] + found,
+                "error": ""
+            }
 
-    # 4. Format for UI
-    output = {
-        "name": chemical_name,
-        "smiles": smiles,
-        "source": source,
-        "markers": []
-    }
-    
-    for marker, score in results.items():
-        if score > 0.5: # Threshold for "Active"
-            output["markers"].append(MAP[marker])
+        # --- PATH B: NEURAL PREDICTION ---
+        else:
+            # If it's not in the CSV, we treat the input as a SMILES string to predict
+            smiles_query = chemical_name 
+            mol = Chem.MolFromSmiles(smiles_query)
+            
+            if not mol:
+                return {"error": "Chemical not in Tox21 and input is not a valid SMILES for prediction."}
 
-    return output
+            # Prepare the 2048-bit Fingerprint
+            fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
+            bits = torch.FloatTensor(list(fp))
+
+            # Run the Skynet Architecture
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model = SkynetArchitecture(input_dim=2048).to(device)
+            # model.load_state_dict(torch.load("skynet_weights.pth")) # Load your trained weights
+            model.eval()
+
+            with torch.no_grad():
+                # The model outputs a probability (0.0 to 1.0)
+                prediction = model(bits.to(device).unsqueeze(0)).item()
+
+            # Determine "What it does" based on the AI's latent space projection
+            status = "TOXIC_POTENTIAL_DETECTED" if prediction > 0.5 else "STABLE_STRUCTURE"
+            
+            return {
+                "name": "AI_INFERENCE",
+                "smiles": smiles_query,
+                "source": "Skynet v12 (Neural)",
+                "markers": [
+                    "I used tox21 to predict what this does, take it back:",
+                    f"Result: {status} (Neural Confidence: {prediction:.2f})"
+                ],
+                "error": ""
+            }
+
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
-    query = sys.argv[1]
-    print(json.dumps(run_pipeline(query)))
+    if len(sys.argv) > 1:
+        # Send the JSON signal back to Go
+        print(json.dumps(run_pipeline(sys.argv[1])))
