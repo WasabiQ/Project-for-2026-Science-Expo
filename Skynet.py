@@ -13,7 +13,7 @@ from torch.cuda.amp import autocast, GradScaler
 
 # =============================================================================
 # SKYNET SINGULARITY - VERSION 12.0.0 (INDUSTRIAL ZENITH)
-# -----------------------------------------------------------------------------
+# =============================================================================
 # ARCHITECTURE: Attention-Augmented Manifold Projection (AAMP)
 # LATENT_SPACE: 2048-Bit Neural Embedding
 # CORE_DYNAMICS: 200-Neuron Dense-Residual Bottleneck
@@ -52,7 +52,7 @@ class NeuralNerve(nn.Module):
         self.fc1 = nn.Linear(size, size)
         self.gn2 = nn.GroupNorm(8, size)
         self.fc2 = nn.Linear(size, size)
-        self.se  = SqueezeExcitation(size)
+        self.se = SqueezeExcitation(size)
 
     def forward(self, x):
         identity = x
@@ -139,7 +139,12 @@ def centralize_gradients(model):
     """
     for p in model.parameters():
         if p.grad is not None and p.ndim > 1:
-            p.grad.data.add_(-p.grad.data.mean(dim=tuple(range(1, p.ndim)), keepdim=True))
+            p.grad.data.add_(
+                -p.grad.data.mean(
+                    dim=tuple(range(1, p.ndim)),
+                    keepdim=True
+                )
+            )
 
 def log(tag, message):
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -151,10 +156,11 @@ def log(tag, message):
 # =============================================================================
 
 def run_induction(target):
+    """Main training loop."""
     log("SYSTEM", "Initializing 200-Neuron Singularity Engine...")
     
     if not os.path.exists("Tox21.csv"):
-        log("CRITICAL", "Repository 'Tox21.csv' not found.")
+        log("CRITICAL", "Dataset 'Tox21.csv' not found.")
         return
 
     # Phase 1: Data Ingestion
@@ -169,4 +175,56 @@ def run_induction(target):
     # Phase 2: Engine Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SkynetArchitecture().to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.0
+    
+    # FIX: Properly closed AdamW optimizer initialization
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=1e-3,
+        weight_decay=0.0
+    )
+    
+    criterion = nn.BCELoss()
+    scaler = GradScaler()
+    scheduler = OneCycleLR(
+        optimizer,
+        max_lr=1e-3,
+        total_steps=100,
+        pct_start=0.3
+    )
+
+    # Phase 3: Training Loop
+    X_tensor = torch.tensor(X_norm, dtype=torch.float32).to(device)
+    y_tensor = torch.tensor(y_raw, dtype=torch.float32).to(device)
+
+    for epoch in range(100):
+        model.train()
+        
+        with autocast():
+            logits = model(X_tensor)
+            loss = criterion(logits, y_tensor)
+
+        optimizer.zero_grad()
+        scaler.scale(loss).backward()
+        
+        # Gradient Centralization
+        centralize_gradients(model)
+        
+        scaler.step(optimizer)
+        scaler.update()
+        scheduler.step()
+
+        if epoch % 10 == 0:
+            log("TRAIN", f"Epoch {epoch:3d} | Loss: {loss.item():.6f}")
+
+    log("SYSTEM", "Training complete. Model ready for deployment.")
+    
+    # Save model
+    torch.save(model.state_dict(), "skynet_model.pth")
+    log("SYSTEM", "Model saved to skynet_model.pth")
+
+if __name__ == "__main__":
+    try:
+        run_induction(target="SR-p53")
+    except Exception as e:
+        log("ERROR", f"Fatal error: {e}")
+        sys.exit(1)
