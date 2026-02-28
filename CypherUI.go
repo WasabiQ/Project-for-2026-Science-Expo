@@ -1,15 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	// THE CORE ECOSYSTEM
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
@@ -17,25 +18,22 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	// PHYSICS: Chipmunk2D (The best 2D engine for Go)
 	"github.com/vova616/chipmunk"
 	"github.com/vova616/chipmunk/vect"
 
-	// DATA: Google Protobuf
-	pb "Skynet/proto"
+	pb "Skynet/proto" // Your Protobuf ecosystem
 )
 
-// --- 1. THE ARCHITECTURAL STATE ---
+// --- 1. STATE & TYPES ---
+
 type ToxNetCore struct {
 	App    fyne.App
 	Window fyne.Window
 	Vault  *pb.Vault
 	Space  *chipmunk.Space
-	
-	// UI Components (Pointer refs for reactive updates)
-	Output  *widget.Entry
-	Search  *widget.Entry
-	Status  *canvas.Text
+
+	Input   *widget.Entry
+	ChatLog *widget.Entry // MultiLine for AI output
 	Neurons []*Neuron
 }
 
@@ -44,91 +42,130 @@ type Neuron struct {
 	Body  *chipmunk.Body
 }
 
-// --- 2. THE THEME ENGINE (Google Lab Aesthetic) ---
-type labTheme struct{ font fyne.Resource }
+// --- 2. AI BRIDGE (The Brain Connector) ---
 
-func (t *labTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
-	if n == theme.ColorNameBackground { return color.NRGBA{2, 4, 8, 255} }
-	if n == theme.ColorNamePrimary { return color.NRGBA{0, 255, 150, 255} }
-	return theme.DefaultTheme().Color(n, v)
+type AIResponse struct {
+	Name    string   `json:"name"`
+	Smiles  string   `json:"smiles"`
+	Source  string   `json:"source"`
+	Markers []string `json:"markers"`
+	Error   string   `json:"error"`
 }
-func (t *labTheme) Font(s fyne.TextStyle) fyne.Resource { return t.font } // Hardcoded inject
-func (t *labTheme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultTheme().Icon(n) }
-func (t *labTheme) Size(n fyne.ThemeSizeName) float32      { return theme.DefaultTheme().Size(n) }
 
-// --- 3. LOGIC MODULES (Minimalistic) ---
+func (t *ToxNetCore) callSkynetAI(query string) {
+	t.appendChat("SYSTEM", "Analyzing molecular manifold for: "+query)
+
+	go func() {
+		// Calling the Python Skynet Bridge
+		cmd := exec.Command("python3", "Skynet_Bridge.py", query)
+		out, err := cmd.Output()
+
+		fyne.CurrentApp().Driver().RunOnMain(func() {
+			if err != nil {
+				t.appendChat("SKYNET_ERROR", "Neural link failed. Ensure RDKit/PyTorch are active.")
+				return
+			}
+
+			var resp AIResponse
+			json.Unmarshal(out, &resp)
+
+			if resp.Error != "" {
+				t.appendChat("SKYNET", resp.Error)
+				return
+			}
+
+			// Format the complex Biochemistry/Physics output
+			header := fmt.Sprintf("[%s] Found via %s", resp.Name, resp.Source)
+			t.appendChat("SKYNET", header)
+			t.appendChat("STRUCTURE", "SMILES: "+resp.Smiles)
+			
+			if len(resp.Markers) > 0 {
+				t.appendChat("RISK_ASSESSMENT", strings.Join(resp.Markers, " | "))
+			} else {
+				t.appendChat("RISK_ASSESSMENT", "No toxicological markers identified in latent space.")
+			}
+		})
+	}()
+}
+
+func (t *ToxNetCore) appendChat(tag, msg string) {
+	timestamp := time.Now().Format("15:04:05")
+	current := t.ChatLog.Text
+	newEntry := fmt.Sprintf("%s [%s] %s\n", timestamp, tag, msg)
+	t.ChatLog.SetText(current + newEntry)
+}
+
+// --- 3. PHYSICS & DATA ---
 
 func (t *ToxNetCore) LoadData() {
-	// Rely on OS library for relative path resolution
 	path, _ := filepath.Abs("chemical_vault.bin")
-	data, _ := os.ReadFile(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Println("Warning: Vault not found, AI will rely on live prediction.")
+		return
+	}
 	t.Vault = &pb.Vault{}
 	pb.Unmarshal(data, t.Vault)
 }
 
 func (t *ToxNetCore) InitPhysics() {
 	t.Space = chipmunk.NewSpace()
-	t.Space.Gravity = vect.Vect{X: 0, Y: 0} // Zero-G orbital movement
+	t.Space.Gravity = vect.Vect{X: 0, Y: 0}
 
-	// Create 100 library-managed bodies
-	for i := 0; i < 100; i++ {
-		radius := vect.Float(rand.Intn(3) + 2)
+	for i := 0; i < 60; i++ {
+		radius := vect.Float(rand.Intn(4) + 2)
 		shape := chipmunk.NewCircle(vect.Vect{0, 0}, radius)
-		shape.SetElasticity(1)
-		
 		body := chipmunk.NewBody(1, shape.Moment(1))
-		body.SetPosition(vect.Vect{vect.Float(rand.Intn(1200)), vect.Float(rand.Intn(800))})
-		body.SetVelocity(vect.Float(rand.Intn(40)-20), vect.Float(rand.Intn(40)-20))
-		
+		body.SetPosition(vect.Vect{vect.Float(rand.Intn(1600)), vect.Float(rand.Intn(1000))})
+		body.SetVelocity(vect.Float(rand.Intn(60)-30), vect.Float(rand.Intn(60)-30))
+
 		t.Space.AddBody(body)
-		t.Space.AddShape(shape)
-		
-		dot := canvas.NewCircle(color.NRGBA{0, 255, 150, 40})
+		dot := canvas.NewCircle(color.NRGBA{0, 255, 150, 60})
 		dot.Resize(fyne.NewSize(float32(radius*2), float32(radius*2)))
 		t.Neurons = append(t.Neurons, &Neuron{Shape: dot, Body: body})
 	}
 }
 
-// --- 4. THE UI COMPOSITION (The "Mac" Look) ---
+// --- 4. THE UI ASSEMBLY ---
 
 func (t *ToxNetCore) Assemble() fyne.CanvasObject {
-	t.Output = widget.NewMultiLineEntry()
-	t.Output.Disable()
-	
-	t.Search = widget.NewEntry()
-	t.Search.SetPlaceHolder("λ_Search_Molecular_ID...")
-	t.Search.OnSubmitted = func(q string) {
-		// Protobuf Map lookup is O(1) - Fast library logic
-		if chem, ok := t.Vault.Entries[strings.ToLower(q)]; ok {
-			t.Output.SetText(fmt.Sprintf("NAME: %s\nSMILES: %s\nMW: %.2f\nLOGP: %.2f", 
-				chem.Name, chem.Smiles, chem.Descriptors.MolecularWeight, chem.Descriptors.Logp))
-		}
+	t.ChatLog = widget.NewMultiLineEntry()
+	t.ChatLog.TextStyle = fyne.TextStyle{Monospace: true}
+	t.ChatLog.Disable()
+
+	t.Input = widget.NewEntry()
+	t.Input.SetPlaceHolder("Enter Chemical Name or SMILES...")
+	t.Input.OnSubmitted = func(s string) {
+		if s == "" { return }
+		t.appendChat("USER", s)
+		t.callSkynetAI(s)
+		t.Input.SetText("")
 	}
 
-	// Tiling Layering
+	// Dynamic background
 	bg := container.NewWithoutLayout()
 	for _, n := range t.Neurons { bg.Add(n.Shape) }
 
-	glassPanel := container.NewBorder(
-		nil, container.NewPadded(t.Search), nil, nil, 
-		container.NewStack(canvas.NewRectangle(color.NRGBA{255, 255, 255, 5}), t.Output),
+	// Layout with a glass-morphism feel
+	chatContainer := container.NewBorder(nil, t.Input, nil, nil, t.ChatLog)
+	glassPanel := container.NewStack(
+		canvas.NewRectangle(color.NRGBA{10, 10, 15, 200}),
+		container.NewPadded(chatContainer),
 	)
 
 	return container.NewStack(bg, container.NewPadded(glassPanel))
 }
 
-// --- 5. EXECUTION ENGINE ---
-
 func main() {
-	core := &ToxNetCore{App: app.New()}
+	core := &ToxNetCore{App: app.NewWithID("com.wasabi.toxnet")}
 	core.LoadData()
-	core.Window = core.App.NewWindow("TOXNET_TITAN")
 	core.InitPhysics()
 
+	core.Window = core.App.NewWindow("CYPHER_UI // SKYNET_v12")
 	core.Window.SetContent(core.Assemble())
-	core.Window.SetFullScreen(true)
+	core.Window.Resize(fyne.NewSize(1280, 720))
 
-	// Library-based Ticker for 60FPS physics
+	// High-frequency physics loop
 	go func() {
 		ticker := time.NewTicker(time.Second / 60)
 		for range ticker.C {
@@ -136,6 +173,11 @@ func main() {
 			for _, n := range core.Neurons {
 				pos := n.Body.Position()
 				n.Shape.Move(fyne.NewPos(float32(pos.X), float32(pos.Y)))
+				// Boundary wrap-around
+				if pos.X < 0 { n.Body.SetPosition(vect.Vect{1600, pos.Y}) }
+				if pos.Y < 0 { n.Body.SetPosition(vect.Vect{pos.X, 1000}) }
+				if pos.X > 1600 { n.Body.SetPosition(vect.Vect{0, pos.Y}) }
+				if pos.Y > 1000 { n.Body.SetPosition(vect.Vect{pos.X, 0}) }
 			}
 			core.Window.Canvas().Refresh(core.Window.Content())
 		}
