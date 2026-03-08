@@ -1,34 +1,34 @@
+# =============================================================================
+# IMPORTS
+# =============================================================================
 import os
 import sys
-import time
 import math
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pandas as pd
 import numpy as np
+
 from datetime import datetime
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.cuda.amp import autocast, GradScaler
 
 # =============================================================================
-# SKYNET SINGULARITY - VERSION 12.0.0 (INDUSTRIAL ZENITH)
-# -----------------------------------------------------------------------------
-# ARCHITECTURE: Attention-Augmented Manifold Projection (AAMP)
-# LATENT_SPACE: 2048-Bit Neural Embedding
-# CORE_DYNAMICS: 200-Neuron Dense-Residual Bottleneck
-# OPTIMIZATION: Gradient Centralization + Sharpness-Aware Minimization
-# PURPOSE: Institutional-Industrial Biological Diagnostic Engine
+# LOGGING
 # =============================================================================
+def log(tag, message):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    sys.stderr.write(f"[{timestamp}] [{tag}] {message}\n")
+    sys.stderr.flush()
 
+# =============================================================================
+# ATTENTION MODULE
+# =============================================================================
 class SqueezeExcitation(nn.Module):
-    """
-    Channel-wise attention mechanism.
-    Recalibrates feature maps to focus on the most toxicologically 
-    relevant biological markers during the induction phase.
-    """
     def __init__(self, channel, reduction=16):
-        super(SqueezeExcitation, self).__init__()
+        super().__init__()
         self.fc = nn.Sequential(
             nn.Linear(channel, channel // reduction, bias=False),
             nn.ReLU(inplace=True),
@@ -37,14 +37,17 @@ class SqueezeExcitation(nn.Module):
         )
 
     def forward(self, x):
-        b, c = x.size()
-        y = self.fc(x)
-        return x * y.expand_as(x)
+        return x * self.fc(x)
 
+# =============================================================================
+# NEURON / RESIDUAL UNIT
+# =============================================================================
 class NeuralNerve(nn.Module):
     """
-    Standardized 200-Neuron Residual Unit.
-    Utilizes GELU activation and Group Normalization for manifold stability.
+    200-Neuron Residual Block with:
+    - GroupNorm (stable on small batches)
+    - GELU
+    - Squeeze-Excitation
     """
     def __init__(self, size=200):
         super().__init__()
@@ -56,42 +59,25 @@ class NeuralNerve(nn.Module):
 
     def forward(self, x):
         identity = x
-        out = F.gelu(self.gn1(x))
-        out = self.fc1(out)
-        out = F.gelu(self.gn2(out))
-        out = self.fc2(out)
+        out = self.fc1(F.gelu(self.gn1(x)))
+        out = self.fc2(F.gelu(self.gn2(out)))
         out = self.se(out)
         return out + identity
 
+# =============================================================================
+# MODEL
+# =============================================================================
 class SkynetArchitecture(nn.Module):
-    """
-    The Master Engine.
-    Combines a 2048-bit projection with a deep 200-neuron hidden core.
-    """
     def __init__(self, input_dim=11, core_size=200):
         super().__init__()
-        
-        # Phase 1: High-Dimensional Latent Projection
+
         self.projection = nn.Linear(input_dim, 2048)
-        
-        # Phase 2: Dimensionality Compression to 200-Neuron Manifold
         self.compressor = nn.Linear(2048, core_size)
-        
-        # Phase 3: Deep Residual Stack (10 Stages)
+
         self.core = nn.Sequential(
-            NeuralNerve(core_size),
-            NeuralNerve(core_size),
-            NeuralNerve(core_size),
-            NeuralNerve(core_size),
-            NeuralNerve(core_size),
-            NeuralNerve(core_size),
-            NeuralNerve(core_size),
-            NeuralNerve(core_size),
-            NeuralNerve(core_size),
-            NeuralNerve(core_size)
+            *[NeuralNerve(core_size) for _ in range(10)]
         )
-        
-        # Phase 4: Final Classification Head
+
         self.head = nn.Sequential(
             nn.Linear(core_size, 64),
             nn.GELU(),
@@ -106,68 +92,94 @@ class SkynetArchitecture(nn.Module):
         return self.head(x)
 
 # =============================================================================
-# BIOLOGICAL DOMAIN DEFINITIONS
+# GRADIENT CENTRALIZATION
 # =============================================================================
-
-FEATURES = [
-    "NR-AR", "NR-AR-LBD", "NR-AhR", "NR-Aromatase", "NR-ER", 
-    "NR-ER-LBD", "NR-PPAR-gamma", "SR-ARE", "SR-ATAD5", "SR-HSE", "SR-MMP"
-]
-
-MAP = {
-    "NR-AR": "Androgen Receptor Signaling Interference",
-    "NR-AR-LBD": "Androgen Receptor-LBD Displacement",
-    "NR-AhR": "Aryl Hydrocarbon Receptor Xenobiotic Stress",
-    "NR-Aromatase": "Aromatase Enzymatic Inhibition",
-    "NR-ER": "Estrogenic Pathway Activation",
-    "NR-ER-LBD": "Estrogen Receptor-LBD Affinity",
-    "NR-PPAR-gamma": "PPAR-Gamma Metabolic Stress",
-    "SR-ARE": "Oxidative Stress Response Element",
-    "SR-ATAD5": "Genotoxic DNA Integrity Failure",
-    "SR-HSE": "Proteotoxic Heat Shock Response",
-    "SR-MMP": "Mitochondrial Energy Potential Collapse"
-}
-
-# =============================================================================
-# MATHEMATICAL UTILITIES
-# =============================================================================
-
 def centralize_gradients(model):
-    """
-    Performs zero-mean centering of gradient vectors. 
-    Crucial for institutional-grade stability.
-    """
     for p in model.parameters():
         if p.grad is not None and p.ndim > 1:
-            p.grad.data.add_(-p.grad.data.mean(dim=tuple(range(1, p.ndim)), keepdim=True))
-
-def log(tag, message):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    sys.stderr.write(f"[{timestamp}] [{tag}] {message}\n")
-    sys.stderr.flush()
+            p.grad.data -= p.grad.data.mean(
+                dim=tuple(range(1, p.ndim)),
+                keepdim=True
+            )
 
 # =============================================================================
-# EXECUTION PROTOCOL
+# FEATURES
 # =============================================================================
+FEATURES = [
+    "NR-AR", "NR-AR-LBD", "NR-AhR", "NR-Aromatase", "NR-ER",
+    "NR-ER-LBD", "NR-PPAR-gamma", "SR-ARE",
+    "SR-ATAD5", "SR-HSE", "SR-MMP"
+]
 
-def run_induction(target):
-    log("SYSTEM", "Initializing 200-Neuron Singularity Engine...")
-    
+# =============================================================================
+# TRAINING ENTRY
+# =============================================================================
+def run_induction(epochs=10, batch_size=128):
+    log("SYSTEM", "Initializing Singularity Engine")
+
     if not os.path.exists("Tox21.csv"):
-        log("CRITICAL", "Repository 'Tox21.csv' not found.")
+        log("CRITICAL", "Tox21.csv not found")
         return
 
-    # Phase 1: Data Ingestion
     df = pd.read_csv("Tox21.csv")
-    X_raw = df[FEATURES].fillna(0).values
-    y_raw = df.iloc[:, -1].fillna(0).values.reshape(-1, 1)
 
-    # Unit Variance Scaling
-    mu, std = X_raw.mean(axis=0), X_raw.std(axis=0) + 1e-9
-    X_norm = (X_raw - mu) / std
+    X = df[FEATURES].fillna(0).values.astype(np.float32)
+    y = df.iloc[:, -1].fillna(0).values.astype(np.float32).reshape(-1, 1)
 
-    # Phase 2: Engine Setup
+    # Normalize
+    X = (X - X.mean(0)) / (X.std(0) + 1e-9)
+
+    X = torch.tensor(X)
+    y = torch.tensor(y)
+
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(X, y),
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=True
+    )
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = SkynetArchitecture().to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_d=ecay,0.0)
-    # \,/0
+    model = SkynetArchitecture(input_dim=X.shape[1]).to(device)
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=1e-3,
+        weight_decay=0.0
+    )
+
+    scheduler = OneCycleLR(
+        optimizer,
+        max_lr=1e-3,
+        epochs=epochs,
+        steps_per_epoch=len(loader)
+    )
+
+    criterion = nn.BCELoss()
+    scaler = GradScaler(enabled=torch.cuda.is_available())
+
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+
+        for xb, yb in loader:
+            xb, yb = xb.to(device), yb.to(device)
+
+            optimizer.zero_grad(set_to_none=True)
+
+            with autocast(enabled=torch.cuda.is_available()):
+                preds = model(xb)
+                loss = criterion(preds, yb)
+
+            scaler.scale(loss).backward()
+            centralize_gradients(model)
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+
+            total_loss += loss.item()
+
+        log("EPOCH", f"{epoch+1}/{epochs} | loss={total_loss/len(loader):.6f}")
+
+    log("SYSTEM", "Training complete")
+    return model

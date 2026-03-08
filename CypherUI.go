@@ -13,7 +13,7 @@ import (
 
     "fyne.io/fyne/v2"
     "fyne.io/fyne/v2/app"
-    "fyne.io/fyne/v2/canvas"
+    "fyne.io/fyne/v2/canva  s"
     "fyne.io/fyne/v2/container"
     "github.com/vova616/chipmunk"
     "github.com/vova616/chipmunk/vect"
@@ -143,7 +143,12 @@ func (t *ToxNetCore) Assemble() fyne.CanvasObject {
 
 func main() {
     core := &ToxNetCore{App: app.NewWithID("com.wasabi.toxnet")}
+
     core.LoadData()
     core.InitPhysics()
 
-    core.Window = core.App.NewWindow("CYPHER_UI //
+    core.Window = core.App.NewWindow("CYPHER_UI // TOXNET")
+    core.Window.SetContent(core.Assemble())
+    core.Window.Resize(fyne.NewSize(1280, 800))
+    core.Window.ShowAndRun()
+}
