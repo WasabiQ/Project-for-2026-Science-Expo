@@ -1,137 +1,145 @@
-import os # For managing local file paths and directories in .deb/.exe environments
-import sys # For system-level operations and command-line argument handling
-import math # For mathematical operations in custom layers
-import time # For measuring inference speed and hardware performance
-import torch # Core library for the neural network architecture
-import torch.nn as nn # Module for defining neural network layers and containers
-import torch.nn.functional as F # Functional interface for activations and loss
-import pandas as pd # For loading and cleaning the data output from your Rust scraper
-import numpy as np # For high-speed matrix math and vectorizing chemical fingerprints
+import os # File path management for vault.bin
+import sys # System-level operations
+import math # Mathematical constants for physics layers
+import time # Telemetry and performance profiling
+import torch # Core AI framework
+import torch.nn as nn # Neural network layers
+import torch.nn.functional as F # Logic and activation functions
+import pandas as pd # Dataframe management
+import numpy as np # Matrix math for chemical fingerprints
 
-from datetime import datetime # For precise logging timestamps
-from torch.optim.lr_scheduler import OneCycleLR # For the learning rate heartbeat
-from torch.cuda.amp import autocast, GradScaler # For mixed-precision training
-from torch_geometric.nn import EGNNConv, TransformerConv, global_mean_pool # AI Core layers
-
-# =============================================================================
-# LOGGING
-# =============================================================================
-def log(tag, message):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    sys.stderr.write(f"[{timestamp}] [{tag}] {message}\n")
-    sys.stderr.flush()
+from datetime import datetime # Logging timestamps
+from torch.optim.lr_scheduler import OneCycleLR # LR heartbeat for least loss
+from torch.cuda.amp import autocast, GradScaler # Mixed-precision stability
+from torch_geometric.nn import EGNNConv, TransformerConv, global_mean_pool # Graph AI Core
+from torch_geometric.data import Data, DataLoader # Graph data structures
+from rdkit import Chem # Chemistry engine for SMILES
+from rdkit.Chem import AllChem # 3D coordinate generation
 
 # =============================================================================
-# HYBRID GRAPH UNIT (The Upgraded NeuralNerve)
+# 1. THE TOX21 RECEPTOR MAP (The 12 Markers)
+# =============================================================================
+RECEPTORS = [
+    "NR-AR", "NR-AR-LBD", "NR-AhR", "NR-Aromatase", "NR-ER", "NR-ER-LBD",
+    "NR-PPAR-gamma", "SR-ARE", "SR-ATAD5", "SR-HSE", "SR-MMP", "SR-p53"
+]
+
+# =============================================================================
+# 2. BINARY CONVERSION: SMILES -> GRAPH TENSORS
+# =============================================================================
+def smiles_to_binary_graph(smiles, target_array=None):
+    mol = Chem.MolFromSmiles(smiles) # Parse raw SMILES string
+    if not mol: return None
+    mol = Chem.AddHs(mol) # Add hydrogens for realistic 3D volume
+    AllChem.EmbedMolecule(mol, AllChem.ETKDG()) # Generate 3D spatial positions
+    
+    # Node Features: [Atomic#, Degree, Charge, Hybridization, Aromaticity]
+    nodes = [[a.GetAtomicNumber(), a.GetDegree(), a.GetFormalCharge(), 
+              float(a.GetHybridization()), float(a.GetIsAromatic())] for a in mol.GetAtoms()]
+    x = torch.tensor(nodes, dtype=torch.float)
+    pos = torch.tensor(mol.GetConformer().GetPositions(), dtype=torch.float) # 3D Math
+    
+    # Edge Features: Bond connectivity and Bond Type
+    edges, edge_attr = [], []
+    for b in mol.GetBonds():
+        i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
+        edges += [[i, j], [j, i]]
+        edge_attr += [[float(b.GetBondTypeAsDouble())]] * 2
+    
+    edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+    edge_attr = torch.tensor(edge_attr, dtype=torch.float)
+
+    # Line Graph (Bond-to-Bond connectivity) to prevent data deterioration
+    line_edges = []
+    bonds = list(mol.GetBonds())
+    for i in range(len(bonds)):
+        for j in range(i + 1, len(bonds)):
+            if set([bonds[i].GetBeginAtomIdx(), bonds[i].GetEndAtomIdx()]) & \
+               set([bonds[j].GetBeginAtomIdx(), bonds[j].GetEndAtomIdx()]):
+                line_edges += [[i, j], [j, i]]
+    line_idx = torch.tensor(line_edges, dtype=torch.long).t().contiguous()
+
+    y = torch.tensor([target_array], dtype=torch.float) if target_array is not None else None
+    return Data(x=x, pos=pos, edge_index=edge_index, edge_attr=edge_attr, line_edge_index=line_idx, y=y)
+
+# =============================================================================
+# 3. CORE HYBRID ENGINE (Upgraded Architecture)
 # =============================================================================
 class HybridNerve(nn.Module):
-    # Combines EGNN (Spatial) and Dual Graph (Structural) into your Residual Unit
-    def __init__(self, size=200, edge_dim=8):
+    def __init__(self, size=200, edge_dim=1):
         super().__init__()
-        self.gn1 = nn.GroupNorm(8, size) # Stable normalization for chemical graphs
+        self.gn1 = nn.GroupNorm(8, size) # Stable norm for small chemical batches
         self.egnn = EGNNConv(size, size, edge_dim, m_dim=size) # Spatial eye
-        self.gn2 = nn.GroupNorm(8, size) # Normalization before attention
-        self.atom_transformer = TransformerConv(size, size // 4, heads=4, edge_dim=edge_dim) # Atom attention
-        self.bond_transformer = TransformerConv(edge_dim, edge_dim // 2, heads=2) # Bond attention
+        self.gn2 = nn.GroupNorm(8, size)
+        self.atom_transformer = TransformerConv(size, size // 4, heads=4, edge_dim=edge_dim)
+        self.bond_transformer = TransformerConv(edge_dim, edge_dim // 2, heads=2) # Line Graph
 
     def forward(self, x, pos, edge_index, edge_attr, line_edge_index):
-        identity = x # Residual skip connection
-        
-        # 1. Spatial Update
-        out, pos_updated = self.egnn(F.gelu(self.gn1(x)), pos, edge_index, edge_attr)
-        
-        # 2. Structural Update (Bond-to-Bond)
-        edge_attr_updated = self.bond_transformer(edge_attr, line_edge_index)
-        
-        # 3. Attention Fusion
-        out = self.atom_transformer(F.gelu(self.gn2(out)), edge_index, edge_attr_updated)
-        
-        return out + identity, pos_updated, edge_attr_updated # Return the trinity of data
+        identity = x # Residual link prevents vanishing gradients
+        x_s, pos_up = self.egnn(F.gelu(self.gn1(x)), pos, edge_index, edge_attr)
+        edge_up = self.bond_transformer(edge_attr, line_edge_index)
+        x_f = self.atom_transformer(F.gelu(self.gn2(x_s)), edge_index, edge_up)
+        return x_f + identity, pos_up, edge_up
 
-# =============================================================================
-# THE REFINED SKYNET ARCHITECTURE
-# =============================================================================
 class SkynetArchitecture(nn.Module):
-    def __init__(self, input_dim=11, core_size=200):
+    def __init__(self, input_dim=5, core_size=200):
         super().__init__()
-        self.projection = nn.Linear(input_dim, 2048) # High-dim projection
-        self.compressor = nn.Linear(2048, core_size) # Compression to core size
-
-        # The Core: 10 Layers of Hybrid Residual Nerves
-        self.layers = nn.ModuleList([HybridNerve(core_size) for _ in range(10)])
-
+        self.projection = nn.Linear(input_dim, 2048) # Wide entry
+        self.compressor = nn.Linear(2048, core_size) # Compression
+        self.core = nn.ModuleList([HybridNerve(core_size) for _ in range(10)]) # 10 Layer Depth
         self.head = nn.Sequential(
-            nn.Linear(core_size, 64),
+            nn.Linear(core_size, 128),
             nn.GELU(),
-            nn.Linear(64, 1),
-            nn.Sigmoid()
+            nn.Linear(128, 12), # Predicts 12 Tox21 receptors simultaneously
+            nn.Sigmoid() # Probability math: 1 / (1 + exp(-x))
         )
 
     def forward(self, data):
-        # Unpack the graph data (Expected from PyG Data object)
-        x, pos, edge_index, edge_attr = data.x, data.pos, data.edge_index, data.edge_attr
-        line_edge_index = data.line_edge_index # The Bond-to-Bond graph
-
-        # Initial Projection
+        x, pos, edge_idx, edge_at, line_idx = data.x, data.pos, data.edge_index, data.edge_attr, data.line_edge_index
         x = F.gelu(self.projection(x))
         x = F.gelu(self.compressor(x))
-
-        # Core Processing (Iterative Reasoning)
-        for layer in self.layers:
-            x, pos, edge_attr = layer(x, pos, edge_index, edge_attr, line_edge_index)
-
-        # Global Pooling (Collapse molecule to vector)
-        x = global_mean_pool(x, data.batch)
+        for layer in self.core:
+            x, pos, edge_at = layer(x, pos, edge_idx, edge_at, line_idx)
+        x = global_mean_pool(x, data.batch) # Condense molecule to vector
         return self.head(x)
 
 # =============================================================================
-# GRADIENT CENTRALIZATION
+# 4. TRAINING: THE INDUCTION PULSE
 # =============================================================================
-def centralize_gradients(model):
-    for p in model.parameters():
-        if p.grad is not None and p.ndim > 1:
-            p.grad.data -= p.grad.data.mean(
-                dim=tuple(range(1, p.ndim)),
-                keepdim=True
-            )
-
-# =============================================================================
-# TRAINING ENGINE
-# =============================================================================
-def run_induction(epochs=10, batch_size=128):
-    log("SYSTEM", "Initializing Skynet Hybrid Engine (v1.1.x.x)")
-
-    # Data Check for local PC build
-    if not os.path.exists("Tox21.csv"):
-        log("CRITICAL", "Tox21.csv not found - Ensure Rust scraper has executed")
-        return
-
-    # Loading processed data from Rust scraper output
+def run_induction(epochs=50, batch_size=32):
+    log("SYSTEM", "Starting Least-Loss Induction on 12 Markers")
+    
+    # Load data from CSV (The output of your Rust scraper's vault conversion)
     df = pd.read_csv("Tox21.csv")
-    log("DATA", f"Loaded {len(df)} samples for chemical analysis")
+    dataset = [smiles_to_binary_graph(s, row[RECEPTORS].values) for s, row in df.iterrows()]
+    loader = DataLoader([d for d in dataset if d], batch_size=batch_size, shuffle=True)
 
-    # Hardware Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = SkynetArchitecture().to(device)
-
+    
+    # AdamW + OneCycleLR for the global minimum loss
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-2)
-    criterion = nn.BCELoss()
+    scheduler = OneCycleLR(optimizer, max_lr=1e-3, epochs=epochs, steps_per_epoch=len(loader))
+    criterion = nn.BCELoss() # Binary Cross-Entropy math for the 12 receptors
     scaler = GradScaler(enabled=torch.cuda.is_available())
 
-    # (Note: In a real run, you would use a PyG DataLoader here for the Data objects)
-    
-    log("SYSTEM", "Starting AlphaOne Pulse Induction")
     model.train()
-    
-    # Training Loop with your custom gradient centralization
     for epoch in range(epochs):
-        start_time = time.time()
-        # [Placeholder for batch loop: for batch in loader...]
+        total_loss = 0
+        for batch in loader:
+            batch = batch.to(device)
+            optimizer.zero_grad(set_to_none=True)
+            with autocast(enabled=torch.cuda.is_available()):
+                preds = model(batch)
+                loss = criterion(preds, batch.y) # Multi-task loss math
+            
+            scaler.scale(loss).backward()
+            centralize_gradients(model) # Keep weights stable
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            total_loss += loss.item()
         
-        # Gradient Centralization Step inside the loop:
-        # centralize_gradients(model)
-        
-        log("EPOCH", f"{epoch+1}/{epochs} | Step Complete")
-
-    log("SYSTEM", "Centauri Core Synthesis Complete")
+        log("EPOCH", f"{epoch+1}/{epochs} | Loss: {total_loss/len(loader):.8f}")
+    
     return model
